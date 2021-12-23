@@ -1,0 +1,831 @@
+#include "includes\ti84pce.inc"
+
+	.assume ADL=1
+	.org userMem-2
+	.db tExtTok,tAsm84CeCmp
+
+	;Setup
+	call _homeup
+	call _RunIndicOff
+	;call _ClrLCD
+	ld hl, $d40000	;Load beginning of VRAM address to hl
+	ld (hl), $ff	;Load random color value to first byte of VRAM
+	ld de, $d40001	;Load beginning of VRAM address + 1 to hl
+	ld bc, $257fe	;Load ((320 * 240) * 2) - 2) into bc (((Width in pixels * Height in pixels) * 2 bytes per pixel) - 2 bytes to account for the beginning pixel)
+	ldir	;Loop over entire VRAM, resetting the color
+	;call _ClrScrnFull
+
+	;Opens debugger
+	scf	;Sets carry
+	sbc hl,hl	;Subracts hl from hl and then subtracts carry (sets to FFFFFF)
+	ld (hl),2	;Loads 2 to FFFFFF (opens debug)
+
+	;Sets breakpoint at label
+	;scf
+	;sbc hl,hl
+	;ld de, __InvPixelsEnd
+	;ld (hl),3
+
+	;Sets watchpoint at label
+	scf
+	sbc hl,hl
+	ld de,__InvPixelsEnd
+	ld c,2
+	ld (hl),11
+
+	nop
+	nop
+	nop
+
+	;Program code
+	ld a, $01	;Load 1 into a
+	ld hl, $020020	;Loads pixel location 32, 32 into hl
+	call DispNum	;Execute subroutine DispNum
+
+	ld a, $02	;Load 2 into a
+	ld hl, $032020	;Loads pixel location 50, 32 into hl
+	call DispNum	;Execute subroutine DispNum
+
+	ld a, $03	;Load 3 into a
+	ld hl, $044020	;Loads pixel location 68, 32 into hl
+	call DispNum	;Execute subroutine DispNum
+
+	ld a, $04	;Load 4 into a
+	ld hl, $020032	;Loads pixel location 32, 50 into hl
+	call DispNum	;Execute subroutine DispNum
+
+	ld a, $05	;Load 5 into a
+	ld hl, $032032	;Loads pixel location 50, 50 into hl
+	call DispNum	;Execute subroutine DispNum
+
+	ld a, $06	;Load 6 into a
+	ld hl, $044032	;Loads pixel location 68, 50 into hl
+	call DispNum	;Execute subroutine DispNum
+
+	ld a, $07	;Load 7 into a
+	ld hl, $020044	;Loads pixel location 32, 68 into hl
+	call DispNum	;Execute subroutine DispNum
+
+	ld a, $08	;Load 8 into a
+	ld hl, $032044	;Loads pixel location 50, 68 into hl
+	call DispNum	;Execute subroutine DispNum
+
+	ld a, $09	;Load 9 into a
+	ld hl, $044044	;Loads pixel location 68, 68 into hl
+	call DispNum	;Execute subroutine DispNum
+
+	nop
+	nop
+	nop
+
+	call EnterTest	;Tests for enter input
+
+	ld hl, $020006	;Loads x coordinate 32 and the span of 6 pixels
+	ld bc, $02000a	;Loads y coordinate 32 and the span of 10 pixels
+	call InvPixels	;Inverts pixels over range
+
+	nop
+	nop
+	nop
+	
+	call EnterTest	;Tests for enter input
+
+	nop
+	nop
+	nop
+
+	;Cleanup/end code
+	call _RunIndicOn
+	call _ClrScrnFull
+	res donePrgm,(iy+doneFlags)
+	ret
+
+EnterTest:
+	call $02014C	;GetCSC: http://wikiti.brandonw.net/index.php?title=84PCE:Syscalls:02014C
+	cp a, skEnter	;Tests if GetCSC found enter
+	jp nz, EnterTest	;Loops if the key isn't enter
+	ret	;Exits subroutine
+
+
+RotateRA4:
+	;------
+	;Rotates acc right by 4 bits/1 hex digit and zeros other digit
+	;Input
+		;a - value to be shifted by 4
+	;Output
+		;a
+	;Destroyed
+		;None
+	;------
+
+	ld b, $04	;Load 4 into b (counter for djnz)
+__IterRRA4:
+	scf	;Set carry flag to 1
+	ccf	;Negate carry flag (set to 0)
+	rra	;Rotate acc right, placing carry (0) on highest bit
+	djnz __IterRRA4	;Loop decreasing b until b = 0
+	ret	;Exit subroutine
+
+
+
+RotateLA4:
+	;-----
+	;Rotates acc left by 4 bits/1 hex digit and zeros other digit
+	;Input
+		;a - value to be shifted by 4
+	;Output
+		;a
+	;Destroyed
+		;None
+	;-----
+
+	ld b, $04	;Load 4 into b (counter for djnz)
+__IterRLA4:
+	scf	;Set carry flag to 1
+	ccf	;Negate carry flag (set to 0)
+	rla	;Rotate acc left, placing carry (0) on lowest bit
+	djnz __IterRLA4	;Loop decreasing b until b = 0
+	ret	;Exit subroutine
+
+
+
+RotateReg:
+	;Rotates specified register
+	;Input:
+		;a - Register to rotate
+			;$X0 - Rotate bc to the right
+			;$X1 - Rotate de to the right
+			;$X2 - Rotate hl to the right
+			;$X3 - Rotate bc to the left
+			;$X4 - Rotate de to the left
+			;$X5 - Rotate hl to the left
+			;$X6 - Rotate/switch b
+			;$X7 - Rotate/switch c
+			;$X8 - Rotate/switch d
+			;$X9 - Rotate/switch e
+			;$XA - Rotate/switch h
+			;$XB - Rotate/switch l
+			;$nX - Rotate n + 1 hexidecimal places (only applies to multibyte registers)
+	;Output:
+		;b, c, d, e, h, l, bc, de, or hl with the updated value
+	;Destroyed
+		;ix, iy
+
+		;Preprare registers
+	ld ix, _RotateRegBTemp	;Get address for b temporary storage (you can't load from an address)
+	ld (ix), b	;Temporarily store b
+	ld (_RotateRegParam), a	;Store parameters to the subroutine
+	call RotateLA4	;Rotate acc so that the desired register argument is alone
+	ld ix, _RotateRegBuffer	;Store address for buffer (can't load to an address with an 8-bit register)
+		;Test for multibyte register
+	ld (ix), bc	;Store bc to buffer
+	cp a, $00	;Test a for 0/bc condition
+	jp Z, _RotateRegInitShiftR	;Jump to right shift
+	cp a, $30	;Test a for 3/bc condition
+	jp Z, _RotateRegInitShiftL	;Jump to left shift
+	ld (ix), de	;Store bc to buffer
+	cp a, $10	;Test a for 1/de condition
+	jp Z, _RotateRegInitShiftR	;Jump to right shift
+	cp a, $40	;Test a for 4/de condition
+	jp Z, _RotateRegInitShiftL	;Jump to left shift
+	ld (ix), hl	;Store bc to buffer
+	cp a, $20	;Test a for 2/hl condition
+	jp Z, _RotateRegInitShiftR	;Jump to right shift
+	cp a, $50	;Test a for 5/hl condition
+	jp Z, _RotateRegInitShiftL	;Jump to left shift
+		;Test for regular register
+	ld (ix), b	;Store b to buffer
+	cp a, $60	;Test a for 6/b condition
+	jp Z, _RotateReg8Bit	;Jump to shift
+	ld (ix), c	;Store c to buffer
+	cp a, $70	;Test a for 7/c condition
+	jp Z, _RotateReg8Bit	;Jump to shift
+	ld (ix), d	;Store d to buffer
+	cp a, $80	;Test a for 8/d condition
+	jp Z, _RotateReg8Bit	;Jump to shift
+	ld (ix), e	;Store e to buffer
+	cp a, $90	;Test a for 9/e condition
+	jp Z, _RotateReg8Bit	;Jump to shift
+	ld (ix), h	;Store h to buffer
+	cp a, $A0	;Test a for A/h condition
+	jp Z, _RotateReg8Bit	;Jump to shift
+	ld (ix), l	;Store l to buffer
+	cp a, $B0	;Test a for B/l condition
+	jp Z, _RotateReg8Bit	;Jump to shift
+
+_RotateRegInitShiftR:
+	ld a, (_RotateRegParam)	;Load the parameter back to acc
+	call RotateRA4	;Rotate acc to get iterations amount alone
+	ld ix, _RotateRegBuffer	;Store buffer location
+	ld iy, _RotateRegBTemp	;Get address for b temporary storage (you can't load from an address)
+	ld b, $04	;Store 4 to b (for counting)
+_RotateRegLShiftR:
+	;"highest" and "lowest" byte refers to the fact that the bytes are flipped when stored to RAM. The word reflect the original location of the byte.
+	rr (ix + 2)	;Rotate "highest" byte (bit rotated out into carry)
+	rr (ix + 1)	;Rotate middle byte (bit rotated out into carry)
+	rr (ix)	;Rotate "lowest" byte (bit rotated out into carry)
+	jp c, _RotateRegShiftRC	;If the carry is set (1 was rotated out of "lowest" byte)
+	;Continue if carry was not set (0 was rotated out of "lowest" byte)
+	res 7, (ix + 2)	;Resets the highest bit in "highest" byte
+	jp _RotateRegShiftRCont	;Jump to continue point
+_RotateRegShiftRC:
+	set 7, (ix + 2)	;Sets the highest bit in "highest" byte
+_RotateRegShiftRCont:
+	djnz _RotateRegLShiftR	;Loop until b = 0
+	ld b, $04	;Store 4 to b
+	dec a	;Decrease a/counter
+	cp a, $00	;Check if a is zero
+	jp nz, _RotateRegLShiftR	;If a is not zero, restart loop
+	ld b, (iy)	;Restore b
+	jp _RotateRegExit	;Finish subroutine
+
+_RotateRegInitShiftL:
+	ld a, (_RotateRegParam)	;Load the parameter back to acc
+	call RotateRA4	;Rotate acc
+	ld ix, _RotateRegBuffer	;Store buffer location
+	ld iy, _RotateRegBTemp	;Get address for b temporary storage (you can't load from an address)
+	ld (iy), b	;Temporarily store b
+	ld b, $04	;Store 4 to b (for counting)
+_RotateRegLShiftL:
+	;"highest" and "lowest" byte refers to the fact that the bytes are flipped when stored to RAM. The word reflect the original location of the byte.
+	rl (ix)	;Rotate "lowest" byte (bit rotated out into carry)
+	rl (ix + 1)	;Rotate middle byte (bit rotated out into carry)
+	rl (ix + 2)	;Rotate "highest" byte (bit rotated out into carry)
+	jp c, _RotateRegShiftLC	;If the carry is set (1 was rotated out of "highest" byte)
+	;Continue if carry was not set (0 was rotated out of "highest" byte)
+	res 0, (ix)	;Resets the lowest bit in "lowest" byte
+	jp _RotateRegShiftLCont	;Jump to continue point
+_RotateRegShiftLC:
+	set 0, (ix)	;Sets the lowest bit in "lowest" byte
+_RotateRegShiftLCont:
+	djnz _RotateRegLShiftL	;Loop until b = 0
+	ld b, $04	;Store 4 to be
+	dec a	;Decrease a/counter
+	cp a, $00	;Check if a is zero
+	jp nz, _RotateRegLShiftL	;If a is not zero, restart loop
+	ld b, (iy)	;Restore b
+	jp _RotateRegExit	;Finish subroutine
+
+_RotateReg8Bit:
+	ld ix, (_RotateRegBuffer)	;Load address for buffer
+	ld a, (ix)	;Load value to process
+	and a, $0F	;Mask out high value
+	call RotateLA4	;Rotate value
+	ld (ix + 1), a	;Load value to process
+	ld a, (ix)	;Load value to process
+	and a, $F0	;Mask out low value
+	call RotateRA4	;Rotate value
+	ld (ix + 2), a	;Store value to process
+	ld a, $00	;Zero out a
+	add a, (ix + 1)	;Adds low value
+	add a, (ix + 2)	;Adds high value
+	ld (ix), a	;Store value
+	jp _RotateRegExit	;Finish subroutine
+
+_RotateRegExit:
+	ld a, (_RotateRegParam)	;Load parameters to the subroutine
+	call RotateLA4	;Rotate acc so that the desired register argument is alone
+	ld ix, _RotateRegBuffer	;Store address for buffer (can't load to an address with an 8-bit register)
+	cp a, $00	;Test a for 0/bc condition
+	jp Z, _RotateRegResBC	;Jump if test succeeds
+	cp a, $30	;Test a for 3/bc condition
+	jp Z, _RotateRegResBC	;Jump if test succeeds
+	cp a, $10	;Test a for 1/de condition
+	jp Z, _RotateRegResDE	;Jump if test succeeds
+	cp a, $40	;Test a for 4/de condition
+	jp Z, _RotateRegResDE	;Jump if test succeeds
+	cp a, $20	;Test a for 2/hl condition
+	jp Z, _RotateRegResHL	;Jump if test succeeds
+	cp a, $50	;Test a for 5/hl condition
+	jp Z, _RotateRegResHL	;Jump if test succeeds
+	cp a, $60	;Test a for 6/b condition
+	jp Z, _RotateRegResB	;Jump if test succeeds
+	cp a, $70	;Test a for 7/c condition
+	jp Z, _RotateRegResC	;Jump if test succeeds
+	cp a, $80	;Test a for 8/d condition
+	jp Z, _RotateRegResD	;Jump if test succeeds
+	cp a, $90	;Test a for 9/e condition
+	jp Z, _RotateRegResE	;Jump if test succeeds
+	cp a, $A0	;Test a for A/h condition
+	jp Z, _RotateRegResH	;Jump if test succeeds
+	cp a, $B0	;Test a for B/l condition
+	jp Z, _RotateRegResL	;Jump if test succeeds
+_RotateRegResBC:
+	ld bc, (ix)	;Store bc to buffer
+	ret	;Exit subroutine
+_RotateRegResDE:
+	ld de, (ix)	;Store bc to buffer
+	ret	;Exit subroutine
+_RotateRegResHL:
+	ld hl , (ix)	;Store bc to buffer
+	ret	;Exit subroutine
+_RotateRegResB:
+	ld b, (ix)	;Store b to buffer
+	ret	;Exit subroutine
+_RotateRegResC:
+	ld c, (ix)	;Store c to buffer
+	ret	;Exit subroutine
+_RotateRegResD:
+	ld d, (ix)	;Store d to buffer
+	ret	;Exit subroutine
+_RotateRegResE:
+	ld e, (ix)	;Store e to buffer
+	ret	;Exit subroutine
+_RotateRegResH:
+	ld h, (ix)	;Store h to buffer
+	ret	;Exit subroutine
+_RotateRegResL:
+	ld l, (ix)	;Store l to buffer
+	ret	;Exit subroutine
+
+_RotateRegBuffer:
+	.db $00, $00, $00
+_RotateRegParam:
+	.db $00
+_RotateRegBTemp:
+	.db $00
+
+
+
+DispNum:
+	;Displays number to screen based on pixel coordinate
+	;a - number to be displayed
+		;Register a digits: 1 0
+		;Digit 0: number (in hex) to display (works with 0-9)
+		;Digit 1:
+			;(not 1): regular
+			;1: inverted
+	;hl - pixel location to place top left corner
+		;Register HL bits: 5 4 3	2 1 0
+		;Bits 2-0: hex representation of x coordinate starting at 0
+		;Bits 4-3: hex representation of y coordinate starting at 0
+	;bc (destroyed) - location for data to be taken from
+
+	ld (_DrawLocation), hl	;Store the location to draw to in memory
+	ld (_DrawNumParam), a	;Store the number param to memory
+	;call RotateRA4	;Rotate the acc to only contain the inverted parameter
+	;cp a, $01	;Check if acc is 1 (check if the first number was 1)
+	;ld a, (_DrawNumParam)	;Restore the number param to memory
+	and a, $0f	;Mask out inverted parameter
+
+	ld bc, _Num0	;Load address for Num1 into bc
+	cp a, 0	;Set Z if acc is 0
+	jp Z, _DrawNum	;Jump to next test if acc isn't 0
+
+	ld bc, _Num1	;Load address for Num1 into bc
+	cp a, 1	;Set Z if acc is 1
+	jp Z, _DrawNum	;Jump to next test if acc isn't 1
+
+	ld bc, _Num2	;Load address for Num1 into bc
+	cp a, 2	;Set Z if acc is 2
+	jp Z, _DrawNum	;Jump to next test if acc isn't 2
+
+	ld bc, _Num3	;Load address for Num1 into bc
+	cp a, 3	;Set Z if acc is 3
+	jp Z, _DrawNum	;Jump to next test if acc isn't 3
+
+	ld bc, _Num4	;Load address for Num1 into bc
+	cp a, 4	;Set Z if acc is 4
+	jp Z, _DrawNum	;Jump to next test if acc isn't 4
+
+	ld bc, _Num5	;Load address for Num1 into bc
+	cp a, 5	;Set Z if acc is 5
+	jp Z, _DrawNum	;Jump to next test if acc isn't 0
+
+	ld bc, _Num6	;Load address for Num1 into bc
+	cp a, 6	;Set Z if acc is 6
+	jp Z, _DrawNum	;Jump to next test if acc isn't 6
+
+	ld bc, _Num7	;Load address for Num1 into bc
+	cp a, 7	;Set Z if acc is 7
+	jp Z, _DrawNum	;Jump to next test if acc isn't 7
+
+	ld bc, _Num8	;Load address for Num1 into bc
+	cp a, 8	;Set Z if acc is 8
+	jp Z, _DrawNum	;Jump to next test if acc isn't 8
+
+	ld bc, _Num9	;Load address for Num1 into bc
+	cp a, 9	;Set Z if acc is 9
+	jp Z, _DrawNum	;Jump to next test if acc isn't 9
+
+_DrawNum:
+	;hl - location to place top left corner (also stored in _DrawLocation)
+		;Register HL bits; 5 4 3	2 1 0
+		;Bits 3-5: hex representation of x coordinate starting at 0
+		;Bits 2-0: hex representation of y coordinate starting at 0
+	;bc - location for data to be taken from
+	;hl' - VRAM location
+	;de' - number to add
+
+	ld (_DrawLocation), hl	;Store location to draw
+	ld ix, _DispNumAddr	;Load address for storage for number address
+	ld (ix), bc	;Load address in bc to _DispNumAddr
+	exx	;Switch working and alternate registers
+	;ALT REG
+	ld hl, _DispNumAddr	;Loads address for _DispNumAddr to store number to be displayed
+		;This frees of bc so that b can be used to djnz later
+	ld hl, $D40000	;Store the start of VRAM to (alt) register hl
+	;ld de, $000140	;Store the hex version of 320 to de (the number to add for each y value) in (alt) reigster de
+	ld de, $000280	;Store the hex version of 320 * 2 to de (the number to add for each y value) in (alt) reigster de
+
+__DrawNumLAddrY:
+	add hl, de	;Add de to hl (adds 320 * 2 to the memory address) (alt registers)
+	exx	;Switch working and alternate registers
+	;WORK REG
+	dec hl	;Decreases y location by 1
+	ld a, 0	;Load 0 into acc
+	cp a, l	;Check if l = a (l = 0) and set Z if so
+	exx	;Switch back working and alternate registers (doesn't modify Z)
+	;ALT REG
+	jp NZ, __DrawNumLAddrY	;Return to start of loop if Z is not set (l != 0)
+	;In summary, adds 320 * 2 to the VRAM address, subtracts 1 from the pixel y location, and loops until the y pixel location is 0
+	;Swap 5-3 and 2-0 of hl/_DrawLocation
+	exx	;Switch working and alternate registers
+	;WORK REG
+		;Mask number
+	ld ix, _DrawLocation	;Get the address for _DrawLocation
+	ld iy, _WorkingDrawLocation	;Get the address for _WorkingDrawLocation
+	;ld a, $00	;Load FF to acc for masking
+	;and a, (ix)	;And a and value at ix
+	;ld (iy), a	;Store and'ed value back to the new memory location
+	ld a, $C0	;Load C0 to acc for masking
+	and a, (ix+1)	;And a and value at ix
+	ld (iy+1), a	;Store and'ed value back to the new memory location
+	ld a, $FF	;Load 00 to acc for masking
+	and a, (ix+2)	;And a and value at ix
+	ld (iy+2), a	;Store and'ed value back to the new memory location
+	ld hl, (iy)	;Load masked value into hl
+	ld a, $32	;Load parameters for RotateReg	(2 - 3 places to rotate, 2 - hl to the right)
+	call RotateReg	;Rotate register
+	exx	;Switch working and alternate registers
+	;ALT REG
+__DrawNumLAddrX:
+	inc hl	;Add 1 to hl
+	inc hl	;Add 2 to hl (adds 2 to the memory address)
+	exx	;Switch working and alternate registers
+	;WORK REG
+	dec hl	;Decreases y location by 1
+	ld a, 0	;Load 0 into acc
+	cp a, l	;Check if l = a (l = 0) and set Z if so
+	exx	;Switch back working and alternate registers (doesn't modify Z)
+	;ALT REG
+	jp NZ, __DrawNumLAddrX	;Return to start of loop if Z is not set (l != 0)
+		;Draw data
+	ld (_DrawLocation), hl	;Stores the location to draw to to memory
+	ld (_WorkingDrawLocation), hl	;Stores the location to draw to to memory
+	ld ix, (_WorkingDrawLocation)	;Stores counting location to iy
+	ld iy, (_DispNumAddr)	;Stores number color data address into ix
+	ld b, $0A	;Load 10 into b (for looping)
+	ld a, $00	;Load 0 to a (for comparing)
+	ld de, $000274	;Store the hex version of 320 * 2 - 12 (subtract 12 because the address is increased by 12 for going across) to de (the number to add for each y value) in (alt) reigster de for adding
+_DrawNumLDrawY:
+	ld c, $0C	;Load 12 into c (for checking end of loop)
+_DrawNumLDrawX:
+	ld l, (iy)	;Load the value at address in iy to l
+	ld (ix), l	;Load value in l to address in ix
+	inc ix	;Advance ix
+	inc iy	;Advance iy
+	dec c	;Decrease c counter (decrease x counter)
+	cp a, c	;Check if c = 0
+	jp NZ, _DrawNumLDrawX	;Loop over x value
+	add ix, de	;Adds de (320 * 2 - 12) to drawing location (ix)
+	djnz _DrawNumLDrawY	;Loops over y
+	ret	;Exit subroutine
+
+
+
+InvPixels:
+	;Invert the color of a range of pixels
+	;Input
+		;bc [11:0] - Start x pixel
+		;bc [23:12] - Distance x pixels
+		;hl [11:0] - Start y pixel
+		;hl [23:12] - Distance y pixels
+	;Output
+		;None
+	;Destroyed
+		;a
+	;Logical overview
+			;Get starting address
+		;1 store hl and bc to __InvPixelsx and __InvPixelsy to free registers
+		;2 mask bc to lower half to get start pixel data and ignore distance data
+		;3 load (__InvPixelsStartAddr) to hl to get starting location of VRAM
+		;4 add (1 pixel * 2 bytes per pixel) to hl to advance one pixel
+		;5 decrease bc counter of starting x coordinate
+		;6 jump to 4 if bc is NZ
+		;7 load (__InvPixelsy) to bc to get y pixel data
+		;8 mask bc to lower half to get needed data like step 2 but for y
+		;9 add (320 pixels per row * 2 bytes per pixel) to hl to get to advance one row
+		;10 decrease bc counter of starting y coordinate
+		;11 jump to 9 if bc is NZ
+		;12 store hl to __InvPixelsStartAddr to hold starting address for pixel
+			;Transition
+		;13 Load x and y pixel counts to hl and bc
+		;14 Call RotateReg (hl 3 -> a, $25; bc 3 -> a, $23)
+		;15 Update x and y pixel counts
+			;Inversion intro
+		;16 Mask hl like step 2 and store
+		;17 Mask bc like step 2 and store
+			;Inversion
+		;18 Load x counter to bc and pixel address to hl
+		;19 and value at hl
+		;20 Increase hl and repeast 19
+		;21 Decrease bc
+		;22 Jump to 18 if bc is NZ
+		;23 Add 320 * 2 to pixel address and store
+		;24 Load y counter to bc
+		;25 Decrease bc and store y counter
+		;26 Jump to 18 if bc is NZ
+
+	;1 store hl and bc to __InvPixelsx and __InvPixelsy to free registers
+	ld (__InvPixelsx), bc
+	ld (__InvPixelsy), hl
+	;2 mask bc to lower half to get start pixel data and ignore distance data
+	ld (__InvPixelsTemp), hl	;Stores data into temp storage
+	ld hl, __InvPixelsTemp	;Loads address for temp storage to hl
+	ld a, $00	;Load top mask of hl
+	and a, (hl)	;Masks bits
+	inc hl	;Moves hl to next bit
+	ld a, $0F	;Load top mask of hl
+	and a, (hl)	;Masks bits
+	ld hl, (__InvPixelsTemp)	;Loads masked value back to hl
+	;3 load (__InvPixelsStartAddr) to hl to get starting location of VRAM
+	ld hl, (__InvPixelsStartAddr)
+	;4 add (1 pixel * 2 bytes per pixel) to hl to advance one pixel
+__InvPixelsxLoop:
+	inc hl
+	inc hl	;Increase hl by 2
+	;5 decrease bc counter of starting x coordinate
+	dec bc
+	;6 jump to 4 if bc is NZ
+	ld a, $ff	;For comparing to
+	tst a, b	;Checks if b has any bits set (Z is set if the bitwise AND of $FF and b is zero, essentially checking for any set bits)
+	jp NZ, __InvPixelsxLoop	;If there are bits set in b, then return to top of the loop
+	tst a, c	;Checks if c has any bits set (Z is set if the bitwise AND of $FF and c is zero, essentially checking for any set bits)
+	jp NZ, __InvPixelsxLoop	;If there are bits set in c, then return to top of the loop
+	;7 load (__InvPixelsy) to bc to get y pixel data
+	ld bc, (__InvPixelsy)
+	;8 mask bc to lower half to get needed data like step 2 but for y
+	ld (__InvPixelsStartAddr), hl	;Store hl for later
+	ld (__InvPixelsTemp), bc	;Stores data into temp storage
+	ld hl, __InvPixelsTemp	;Loads address for temp storage to hl
+	ld a, $00	;Load top mask of hl
+	and a, (hl)	;Masks bits
+	inc hl	;Moves hl to next bit
+	ld a, $0F	;Load top mask of hl
+	and a, (hl)	;Masks bits
+	ld bc, (__InvPixelsTemp)	;Loads masked value back to bc
+	ld hl, (__InvPixelsStartAddr)	;Reload hl with pixel start point
+	;9 add (320 pixels per row * 2 bytes per pixel) to hl to get to advance one row
+__InvPixelsyLoop:
+	ld (__InvPixelsTemp), bc	;Temporarily store bc
+	ld bc, $000280	;Store number to add into bc ((320 * 2) to hex is 280)
+	add hl, bc	;Adds 320 * 2 to hl
+	ld bc, (__InvPixelsTemp)	;Restore bc
+	;10 decrease bc counter of starting y coordinate
+	dec bc
+	;11 jump to 9 if bc is NZ
+	ld a, $ff	;For comparing to
+	tst a, b	;Checks if b has any bits set (Z is set if the bitwise AND of $FF and b is zero, essentially checking for any set bits)
+	jp NZ, __InvPixelsyLoop	;If there are bits set in b, then return to top of the loop
+	tst a, c	;Checks if c has any bits set (Z is set if the bitwise AND of $FF and c is zero, essentially checking for any set bits)
+	jp NZ, __InvPixelsyLoop	;If there are bits set in c, then return to top of the loop
+	;12 store hl to __InvPixelsStartAddr to hold starting address for pixel
+	ld (__InvPixelsStartAddr), hl
+	;13 Load x and y pixel counts to hl and bc
+	ld hl, __InvPixelsx
+	ld bc, __InvPixelsy
+	;14 Call RotateReg (hl 3 -> a, $25; bc 3 -> a, $23)
+	ld a, $25
+	call RotateReg
+	ld a, $23
+	call RotateReg
+	;15 Update x and y pixel counts
+	ld (__InvPixelsx), hl
+	ld (__InvPixelsy), bc
+	;16 Mask hl like step 2 and store
+	ld (__InvPixelsTemp), hl	;Stores data into temp storage
+	ld hl, __InvPixelsTemp	;Loads address for temp storage to hl
+	ld a, $00	;Load top mask of hl
+	and a, (hl)	;Masks bits
+	inc hl	;Moves hl to next bit
+	ld a, $0F	;Load top mask of hl
+	and a, (hl)	;Masks bits
+	ld hl, (__InvPixelsTemp)	;Loads masked value back to hl
+	ld (__InvPixelsx), hl	;Stores value to counter
+	;17 Mask bc like step 2 and store
+	ld (__InvPixelsTemp), bc	;Stores data into temp storage
+	ld hl, __InvPixelsTemp	;Loads address for temp storage to hl
+	ld a, $00	;Load top mask of hl
+	and a, (hl)	;Masks bits
+	inc hl	;Moves hl to next bit
+	ld a, $0F	;Load top mask of hl
+	and a, (hl)	;Masks bits
+	ld bc, (__InvPixelsTemp)	;Loads masked value back to hl
+	ld (__InvPixelsx), bc	;Stores value to counter
+__InvPixelsInvLoop:
+	;18 Load x counter to bc and pixel address to hl
+	ld bc, (__InvPixelsx)
+	ld hl, (__InvPixelsStartAddr)
+	;19 and value at hl
+	ld a, $FF
+	and a, (hl)	;and bits with all 1's, essentially flipping them
+	;20 Increase hl and repeast 19
+	inc hl
+	and a, (hl)
+	;21 Decrease bc
+	dec bc
+	;22 Jump to 18 if bc is NZ
+	ld a, $ff	;For comparing to
+	tst a, b	;Checks if b has any bits set (Z is set if the bitwise AND of $FF and b is zero, essentially checking for any set bits)
+	jp NZ, __InvPixelsInvLoop	;If there are bits set in b, then return to top of the loop
+	tst a, c	;Checks if c has any bits set (Z is set if the bitwise AND of $FF and c is zero, essentially checking for any set bits)
+	jp NZ, __InvPixelsInvLoop	;If there are bits set in c, then return to top of the loop
+	;23 Add 320 * 2 to pixel address and store
+	ld hl, (__InvPixelsStartAddr)
+	ld bc, $000280	;Store number to add into bc ((320 * 2) to hex is 280)
+	add hl, bc	;Adds 320 * 2 to hl
+	;24 Load y counter to bc
+	ld bc, (__InvPixelsy)
+	;25 Decrease bc and store y counter
+	dec bc
+	ld (__InvPixelsy), bc
+	;26 Jump to 18 if bc is NZ
+	ld a, $ff	;For comparing to
+	tst a, b	;Checks if b has any bits set (Z is set if the bitwise AND of $FF and b is zero, essentially checking for any set bits)
+	jp NZ, __InvPixelsInvLoop	;If there are bits set in b, then return to top of the loop
+	tst a, c	;Checks if c has any bits set (Z is set if the bitwise AND of $FF and c is zero, essentially checking for any set bits)
+	jp NZ, __InvPixelsInvLoop	;If there are bits set in c, then return to top of the loop
+__InvPixelsEnd:
+	ret	;Return to the normally scheduled assembly
+	;Variables
+__InvPixelsx:	;Storage for x input data
+	.db $00, $00, $00
+__InvPixelsy:	;Storage for y input data
+	.db $00, $00, $00
+__InvPixelsTemp:	;Temporary 24 bit storage
+	.db $00, $00, $00
+__InvPixelsStartAddr:	;Start address for the pixels
+	.db $D4, $00, $00
+
+
+
+CheckRow:
+	;Check row for specified number
+	;Input
+		;a [7:4] - Row to check
+		;a [3:0] - Value to check for
+	;Output
+		;None
+	;Destroyed
+		;a
+	ret	;Return to the normally scheduled assembly
+
+
+
+GenTable:
+	;Generates solved table to compare the player's answers to
+	;Input:
+		;None
+	;Output
+		;None
+	;Destroyed:
+		;TBD
+	ret	;Return to the normally scheduled assembly
+
+
+_DrawNumParam:
+	.db $00
+_DrawLocation:
+	.db $00, $00, $00
+_WorkingDrawLocation:
+	.db $00, $00, $00
+_DispNumAddr:
+	.db $00, $00, $00
+
+_SolvedTable:
+	.fill 40, 0
+_ProgressTable:
+	.fill 40, 0
+
+;_Num0:
+;	.db $FF, $FF, $FF, $FF, $00, $00, $00, $00, $FF, $FF, $FF, $FF	;row 1
+;	.db $FF, $FF, $00, $00, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 2
+;	.db $00, $00, $00, $00, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 3
+;	.db $00, $00, $00, $00, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 4
+;	.db $00, $00, $00, $00, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 5
+;	.db $00, $00, $00, $00, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 6
+;	.db $00, $00, $00, $00, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 7
+;	.db $00, $00, $00, $00, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 8
+;	.db $FF, $FF, $00, $00, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 9
+;	.db $FF, $FF, $FF, $FF, $00, $00, $00, $00, $FF, $FF, $FF, $FF	;row 10
+;
+;_Num1:
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $00, $00, $FF, $FF	;row 1
+;	.db $FF, $FF, $FF, $FF, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 2
+;	.db $FF, $FF, $00, $00, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 3
+;	.db $FF, $FF, $00, $00, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 4
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $00, $00, $FF, $FF	;row 5
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $00, $00, $FF, $FF	;row 6
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $00, $00, $FF, $FF	;row 7
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $00, $00, $FF, $FF	;row 8
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $00, $00, $FF, $FF	;row 9
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $00, $00, $FF, $FF	;row 10
+;
+;_Num2:
+;	.db $FF, $FF, $FF, $FF, $00, $00, $00, $00, $FF, $FF, $FF, $FF	;row 1
+;	.db $FF, $FF, $FF, $FF, $00, $00, $00, $00, $FF, $FF, $FF, $FF	;row 2
+;	.db $FF, $FF, $00, $00, $FF, $FF, $FF, $FF, $00, $00, $FF, $FF	;row 3
+;	.db $FF, $FF, $00, $00, $FF, $FF, $FF, $FF, $00, $00, $FF, $FF	;row 4
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $FF, $FF	;row 5
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $FF, $FF	;row 6
+;	.db $FF, $FF, $FF, $FF, $00, $00, $00, $00, $FF, $FF, $FF, $FF	;row 7
+;	.db $FF, $FF, $FF, $FF, $00, $00, $00, $00, $FF, $FF, $FF, $FF	;row 8
+;	.db $FF, $FF, $00, $00, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 9
+;	.db $FF, $FF, $00, $00, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 10
+;
+;_Num3:
+;	.db $FF, $FF, $FF, $FF, $00, $00, $00, $00, $FF, $FF, $FF, $FF	;row 1
+;	.db $FF, $FF, $00, $00, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 2
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 3
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 4
+;	.db $FF, $FF, $FF, $FF, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 5
+;	.db $FF, $FF, $FF, $FF, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 6
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 7
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 8
+;	.db $FF, $FF, $00, $00, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 9
+;	.db $FF, $FF, $FF, $FF, $00, $00, $00, $00, $FF, $FF, $FF, $FF	;row 10
+;
+;_Num4:
+;	.db $FF, $FF, $00, $00, $FF, $FF, $FF, $FF, $00, $00, $FF, $FF	;row 1
+;	.db $00, $00, $00, $00, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 2
+;	.db $00, $00, $00, $00, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 3
+;	.db $00, $00, $00, $00, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 4
+;	.db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00	;row 5
+;	.db $FF, $FF, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00	;row 6
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 7
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 8
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 9
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $FF, $FF	;row 10
+;
+;_Num5:
+;	.db $FF, $FF, $00, $00, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 1
+;	.db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00	;row 2
+;	.db $00, $00, $00, $00, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF	;row 3
+;	.db $00, $00, $00, $00, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF	;row 4
+;	.db $00, $00, $00, $00, $00, $00, $00, $00, $FF, $FF, $FF, $FF	;row 5
+;	.db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 6
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 7
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 8
+;	.db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 9
+;	.db $FF, $FF, $00, $00, $00, $00, $00, $00, $FF, $FF, $FF, $FF	;row 10
+;
+;_Num6:
+;	.db $FF, $FF, $FF, $FF, $00, $00, $00, $00, $FF, $FF, $FF, $FF	;row 1
+;	.db $FF, $FF, $00, $00, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 2
+;	.db $00, $00, $00, $00, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF	;row 3
+;	.db $00, $00, $00, $00, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF	;row 4
+;	.db $00, $00, $00, $00, $00, $00, $00, $00, $FF, $FF, $FF, $FF	;row 5
+;	.db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 6
+;	.db $00, $00, $00, $00, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 7
+;	.db $00, $00, $00, $00, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 8
+;	.db $FF, $FF, $00, $00, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 9
+;	.db $FF, $FF, $FF, $FF, $00, $00, $00, $00, $FF, $FF, $FF, $FF	;row 10
+;
+;_Num7:
+;	.db $FF, $FF, $FF, $FF, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 1
+;	.db $FF, $FF, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00	;row 2
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 3
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 4
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 5
+;	.db $FF, $FF, $FF, $FF, $FF, $00, $00, $00, $00, $00, $00, $00	;row 6
+;	.db $FF, $FF, $FF, $FF, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 7
+;	.db $FF, $FF, $FF, $FF, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 8
+;	.db $FF, $FF, $FF, $FF, $00, $00, $00, $00, $FF, $FF, $FF, $FF	;row 9
+;	.db $FF, $FF, $FF, $FF, $00, $00, $00, $00, $FF, $FF, $FF, $FF	;row 10
+;
+;_Num8:
+;	.db $FF, $FF, $FF, $FF, $00, $00, $00, $00, $FF, $FF, $FF, $FF	;row 1
+;	.db $FF, $FF, $00, $00, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 2
+;	.db $00, $00, $00, $00, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 3
+;	.db $00, $00, $00, $00, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 4
+;	.db $FF, $FF, $00, $00, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 5
+;	.db $FF, $FF, $00, $00, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 6
+;	.db $00, $00, $00, $00, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 7
+;	.db $00, $00, $00, $00, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 8
+;	.db $FF, $FF, $00, $00, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 9
+;	.db $FF, $FF, $FF, $FF, $00, $00, $00, $00, $FF, $FF, $FF, $FF	;row 10
+;
+;_Num9:
+;	.db $FF, $FF, $FF, $FF, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 1
+;	.db $FF, $FF, $00, $00, $00, $00, $00, $00, $00, $00, $FF, $FF	;row 2
+;	.db $00, $00, $00, $00, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 3
+;	.db $00, $00, $00, $00, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 4
+;	.db $FF, $FF, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00	;row 5
+;	.db $FF, $FF, $FF, $FF, $00, $00, $00, $00, $00, $00, $00, $00	;row 6
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 7
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 8
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $00, $00	;row 9
+;	.db $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $00, $00, $FF, $FF	;row 10
+
+#include "includes\numbers.asm"
